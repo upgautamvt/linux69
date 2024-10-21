@@ -83,17 +83,7 @@ static int cls_bpf_exec_opcode(int code)
 	}
 }
 
-typedef unsigned int (*bpf_dispatcher_fn)(const void *ctx,
-					  const struct bpf_insn *insnsi,
-					  unsigned int (*bpf_func)(const void *,
-								   const struct bpf_insn *));
-
-//TODO: wip for statistics
 static inline int absorb_bpf_tc_ingress(struct sk_buff *skb) {
-	//just to guarantee same performance when we don't migrate among cores
-	//and to avoid race conditions
-	cant_migrate();
-
 	//we don't need bpf related statistics such as how oftern bpf trigger function got dispatched etc.
 	//also we don't need bpf dispatcher function __bpf_prog_run in filter.h
 
@@ -121,11 +111,21 @@ static inline int absorb_bpf_tc_ingress(struct sk_buff *skb) {
 	struct iphdr *ip = (struct iphdr *)(data + sizeof(struct ethhdr));
 	__be32 src_ip = ip->saddr; // Get source IP
 
-	if (src_ip == __constant_htonl(0xC0A80101)) {
-		return 0; //ACCEPT packet
+	int ens4_ifindex = if_nametoindex("ens4");
+
+	//always accept packet for any interfaces other than ens4
+	if (skb->dev && skb->dev->ifindex != ens4_ifindex) {
+		return 0;
 	}
 
-	return -1; //DROP packet
+	if (skb->dev && skb->dev->ifindex == ens4_ifindex) {
+		// Accept packets from 192.168.100.10
+		if (src_ip == __constant_htonl(0xC0A8640A)) {
+			return 0; //ACCEPT packet
+		} else {
+			return -1;
+		}
+	}
 }
 
 TC_INDIRECT_SCOPE int cls_bpf_classify(struct sk_buff *skb,
