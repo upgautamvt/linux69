@@ -21,10 +21,10 @@
 #include <net/sock.h>
 #include <net/tc_wrapper.h>
 
-#include <linux/skbuff.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/kernel.h>
+#include <linux/netdevice.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Daniel Borkmann <dborkman@redhat.com>");
@@ -111,21 +111,27 @@ static inline int absorb_bpf_tc_ingress(struct sk_buff *skb) {
 	struct iphdr *ip = (struct iphdr *)(data + sizeof(struct ethhdr));
 	__be32 src_ip = ip->saddr; // Get source IP
 
-	int ens4_ifindex = if_nametoindex("ens4");
+	// Get the interface index for ens4
+	struct net_device *dev = dev_get_by_name(&init_net, "ens4");
+	int ens4_ifindex = dev ? dev->ifindex : -1;
+	dev_put(dev);  // Release reference to net_device
 
-	//always accept packet for any interfaces other than ens4
+	// Always accept packet for any interfaces other than ens4
 	if (skb->dev && skb->dev->ifindex != ens4_ifindex) {
-		return 0;
+		return 0; // Continue processing
 	}
 
+	// If interface is ens4, accept packets from 192.168.100.10
 	if (skb->dev && skb->dev->ifindex == ens4_ifindex) {
-		// Accept packets from 192.168.100.10
-		if (src_ip == __constant_htonl(0xC0A8640A)) {
-			return 0; //ACCEPT packet
+		if (src_ip == __constant_htonl(0xC0A8640A)) { // 192.168.100.10
+			return 0;  // ACCEPT packet
 		} else {
-			return -1;
+			return -1; // Drop packet
 		}
 	}
+
+
+	return 0; //default is accept packet
 }
 
 TC_INDIRECT_SCOPE int cls_bpf_classify(struct sk_buff *skb,
@@ -150,7 +156,7 @@ TC_INDIRECT_SCOPE int cls_bpf_classify(struct sk_buff *skb,
 			__skb_push(skb, skb->mac_len); //include ethernet header as well
 			bpf_compute_data_pointers(skb);
 			//filter_res = bpf_prog_run(prog->filter, skb);
-			filter_res = absorb_bpf_tc_ingress(prog->filter, skb);
+			filter_res = absorb_bpf_tc_ingress(skb);
 			__skb_pull(skb, skb->mac_len); //reset back so that ethernet frame is stripped off again
 		} else {
 			//we don't need __skb_push/pull in situtations other than
